@@ -33,11 +33,14 @@ npm install
 TELEGRAM_BOT_TOKEN=your_telegram_bot_token
 CODE_ROOT=C:\code
 CODEX_REASONING_EFFORT=medium
+CODEX_SANDBOX_MODE=read-only
 ```
 
 `CODE_ROOT` should point at the folder that contains the git repos you want the bot to browse. If omitted, it defaults to `C:\code`.
 
 `CODEX_REASONING_EFFORT` controls how much work Codex does per request. Valid values are `minimal`, `low`, `medium`, `high`, and `xhigh`. If omitted or invalid, AndyBot defaults to `medium`.
+
+`CODEX_SANDBOX_MODE` controls whether Codex can modify files. Valid values are `read-only`, `workspace-write`, and `danger-full-access`. If omitted or invalid, AndyBot defaults to `read-only`.
 
 3. Start the bot:
 
@@ -64,6 +67,7 @@ In Telegram, send:
 - `/start` to see the basic command list
 - `repo all` to list the top repos under `CODE_ROOT`
 - `repo 1` to select a repo from the last list
+- `repo current` to show the selected repo and thread status
 - `repo clear` to clear the selected repo
 - `repo reset` to clear the saved Codex thread for the selected repo
 - `repo compact` to summarize the current thread into a fresh one

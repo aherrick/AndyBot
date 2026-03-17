@@ -1,5 +1,5 @@
 import "dotenv/config";
-import type { ModelReasoningEffort } from "@openai/codex-sdk";
+import type { ModelReasoningEffort, SandboxMode } from "@openai/codex-sdk";
 import { Bot, Context } from "grammy";
 import { compactRepoThread, runCodexInRepo } from "./codex.js";
 import { getTopRepos } from "./repos.js";
@@ -31,10 +31,22 @@ function parseReasoningEffort(value?: string): ModelReasoningEffort {
   }
 }
 
+function parseSandboxMode(value?: string): SandboxMode {
+  switch (value?.trim().toLowerCase()) {
+    case "read-only":
+    case "workspace-write":
+    case "danger-full-access":
+      return value.trim().toLowerCase() as SandboxMode;
+    default:
+      return "read-only";
+  }
+}
+
 const env = {
   telegramBotToken: process.env.TELEGRAM_BOT_TOKEN?.trim() ?? "",
   codeRoot: process.env.CODE_ROOT?.trim() || "C:\\code",
   codexReasoningEffort: parseReasoningEffort(process.env.CODEX_REASONING_EFFORT),
+  codexSandboxMode: parseSandboxMode(process.env.CODEX_SANDBOX_MODE),
 };
 
 if (!env.telegramBotToken) throw new Error("Missing TELEGRAM_BOT_TOKEN in .env");
@@ -163,7 +175,8 @@ bot.on("message:text", async (ctx) => {
         chat.selectedRepoPath,
         chat.selectedRepoName,
         threadId,
-        env.codexReasoningEffort
+        env.codexReasoningEffort,
+        env.codexSandboxMode
       );
 
       if (result.newThreadId) {
@@ -207,7 +220,8 @@ bot.on("message:text", async (ctx) => {
       chat.selectedRepoPath,
       buildPrompt(chat.selectedRepoName, chat.selectedRepoPath, text),
       getThreadId(chat),
-      env.codexReasoningEffort
+      env.codexReasoningEffort,
+      env.codexSandboxMode
     );
 
     if (result.threadId) {
@@ -236,4 +250,5 @@ bot.catch((err) => console.error("Bot error:", err.error));
 console.log("Andy bot running…");
 console.log(`Repo root: ${env.codeRoot}`);
 console.log(`Codex reasoning effort: ${env.codexReasoningEffort}`);
+console.log(`Codex sandbox mode: ${env.codexSandboxMode}`);
 bot.start();
