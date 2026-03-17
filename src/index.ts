@@ -46,6 +46,7 @@ const env = {
   codeRoot: process.env.CODE_ROOT?.trim() || "C:\\code",
   codexReasoningEffort: parseReasoningEffort(process.env.CODEX_REASONING_EFFORT),
   codexSandboxMode: parseSandboxMode(process.env.CODEX_SANDBOX_MODE),
+  codexModel: process.env.CODEX_MODEL?.trim(),
 };
 
 if (!env.telegramBotToken) throw new Error("Missing TELEGRAM_BOT_TOKEN in .env");
@@ -181,7 +182,8 @@ bot.on("message:text", async (ctx) => {
         chat.selectedRepoName,
         threadId,
         env.codexReasoningEffort,
-        env.codexSandboxMode
+        env.codexSandboxMode,
+        env.codexModel
       );
 
       if (result.newThreadId) {
@@ -226,7 +228,8 @@ bot.on("message:text", async (ctx) => {
       buildPrompt(chat.selectedRepoName, chat.selectedRepoPath, text),
       getThreadId(chat),
       env.codexReasoningEffort,
-      env.codexSandboxMode
+      env.codexSandboxMode,
+      env.codexModel
     );
 
     if (result.threadId) {
@@ -256,4 +259,5 @@ console.log("Andy bot running…");
 console.log(`Repo root: ${env.codeRoot}`);
 console.log(`Codex reasoning effort: ${env.codexReasoningEffort}`);
 console.log(`Codex sandbox mode: ${env.codexSandboxMode}`);
+if (env.codexModel) console.log(`Codex model: ${env.codexModel}`);
 bot.start();

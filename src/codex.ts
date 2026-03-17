@@ -6,13 +6,15 @@ function openThread(
   repoPath: string,
   reasoningEffort: ModelReasoningEffort,
   sandboxMode: SandboxMode,
-  existingThreadId?: string
+  existingThreadId?: string,
+  model?: string
 ) {
-  const opts = {
+  const opts: any = {
     workingDirectory: repoPath,
     modelReasoningEffort: reasoningEffort,
     sandboxMode,
   };
+  if (model) opts.model = model;
   return existingThreadId
     ? codex.resumeThread(existingThreadId, opts)
     : codex.startThread(opts);
@@ -23,9 +25,10 @@ export async function runCodexInRepo(
   prompt: string,
   existingThreadId?: string,
   reasoningEffort: ModelReasoningEffort = "medium",
-  sandboxMode: SandboxMode = "read-only"
+  sandboxMode: SandboxMode = "read-only",
+  model?: string
 ): Promise<{ text: string; threadId?: string }> {
-  const thread = openThread(repoPath, reasoningEffort, sandboxMode, existingThreadId);
+  const thread = openThread(repoPath, reasoningEffort, sandboxMode, existingThreadId, model);
 
   const { events } = await thread.runStreamed(prompt);
   let finalResponse = "";
@@ -54,13 +57,14 @@ export async function compactRepoThread(
   repoName: string,
   existingThreadId: string,
   reasoningEffort: ModelReasoningEffort = "medium",
-  sandboxMode: SandboxMode = "read-only"
+  sandboxMode: SandboxMode = "read-only",
+  model?: string
 ): Promise<{ summary: string; newThreadId?: string }> {
-  const oldThread = openThread(repoPath, reasoningEffort, sandboxMode, existingThreadId);
+  const oldThread = openThread(repoPath, reasoningEffort, sandboxMode, existingThreadId, model);
   const summaryTurn: RunResult = await oldThread.run(`${COMPACT_PROMPT}\nRepo: ${repoName}`);
   const summary = summaryTurn.finalResponse;
 
-  const newThread = openThread(repoPath, reasoningEffort, sandboxMode);
+  const newThread = openThread(repoPath, reasoningEffort, sandboxMode, undefined, model);
   await newThread.run(
     "This is a compact handoff summary from a previous thread. " +
       "Use it as starting context. Do not repeat it back unless asked.\n\n" +
