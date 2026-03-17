@@ -75,7 +75,7 @@ function truncate(text: string, max: number): string {
 function buildCommands(): string {
   return [
     "repo all – list repos",
-    "repo <n> – select a repo",
+    "repo &lt;n&gt; – select a repo",
     "repo current – show selected repo",
     "repo reset – clear thread",
     "repo compact – compress thread",
@@ -124,12 +124,13 @@ bot.command("start", (ctx) =>
       buildCommands(),
       "",
       "Then just type your question.",
-    ].join("\n")
+    ].join("\n"),
+    { parse_mode: "HTML" }
   )
 );
 
 bot.command("help", (ctx) =>
-  ctx.reply(buildCommands())
+  ctx.reply(buildCommands(), { parse_mode: "HTML" })
 );
 
 bot.on("message:text", async (ctx) => {
