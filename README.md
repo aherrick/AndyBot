@@ -6,10 +6,10 @@ AndyBot is a small Telegram bot that lets you pick a local git repo and send rep
 
 - Lists git repositories under a configured root folder
 - Lets you select one repo per Telegram chat
-- Sends free-form messages to Codex with that repo as the working directory
+- Sends free-form messages to Codex with that repo as the working directory (streamed)
 - Stores per-repo thread IDs so a chat can resume context
 - Can compact an existing thread into a fresh handoff summary
-- Writes simple logs to `data/` for bot activity and Codex interactions
+- Writes simple bot activity to `data/`
 
 ## Requirements
 
@@ -32,9 +32,12 @@ npm install
 ```env
 TELEGRAM_BOT_TOKEN=your_telegram_bot_token
 CODE_ROOT=C:\code
+CODEX_REASONING_EFFORT=medium
 ```
 
 `CODE_ROOT` should point at the folder that contains the git repos you want the bot to browse. If omitted, it defaults to `C:\code`.
+
+`CODEX_REASONING_EFFORT` controls how much work Codex does per request. Valid values are `minimal`, `low`, `medium`, `high`, and `xhigh`. If omitted or invalid, AndyBot defaults to `medium`.
 
 3. Start the bot:
 
@@ -73,7 +76,6 @@ The bot writes local state under `data/`:
 
 - `data/state.json` stores selected repos and saved thread IDs per chat
 - `data/worklog.jsonl` stores a compact history of bot activity
-- `data/codex-log.jsonl` stores simple request/response logs for Codex interactions
 
 The `data/` folder is already ignored by `.gitignore`.
 

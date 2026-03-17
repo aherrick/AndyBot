@@ -1,4 +1,5 @@
 import "dotenv/config";
+import type { ModelReasoningEffort } from "@openai/codex-sdk";
 import { Bot, Context } from "grammy";
 import { compactRepoThread, runCodexInRepo } from "./codex.js";
 import { getTopRepos } from "./repos.js";
@@ -17,9 +18,23 @@ import {
 
 // --- Config ---
 
+function parseReasoningEffort(value?: string): ModelReasoningEffort {
+  switch (value?.trim().toLowerCase()) {
+    case "minimal":
+    case "low":
+    case "medium":
+    case "high":
+    case "xhigh":
+      return value.trim().toLowerCase() as ModelReasoningEffort;
+    default:
+      return "medium";
+  }
+}
+
 const env = {
   telegramBotToken: process.env.TELEGRAM_BOT_TOKEN?.trim() ?? "",
   codeRoot: process.env.CODE_ROOT?.trim() || "C:\\code",
+  codexReasoningEffort: parseReasoningEffort(process.env.CODEX_REASONING_EFFORT),
 };
 
 if (!env.telegramBotToken) throw new Error("Missing TELEGRAM_BOT_TOKEN in .env");
@@ -54,7 +69,7 @@ function buildRepoList(repos: RepoInfo[], selectedPath?: string): string {
     "",
     ...lines,
     "",
-    "Commands: repo 1 · repo clear · repo reset · repo compact",
+    "Commands: repo 1 · repo current · repo clear · repo reset · repo compact",
   ].join("\n");
 }
 
@@ -80,6 +95,7 @@ bot.command("start", (ctx) =>
       "",
       "repo all — list repos",
       "repo <n> — select a repo",
+      "repo current — show selected repo",
       "repo clear — deselect",
       "repo reset — clear thread",
       "repo compact — compress thread",
@@ -104,6 +120,20 @@ bot.on("message:text", async (ctx) => {
       if (!repos.length) return ctx.reply(`No git repos found under ${env.codeRoot}`);
       lastRepoLists.set(ctx.chat.id, repos);
       return replyLong(ctx, buildRepoList(repos, chat.selectedRepoPath));
+    }
+
+    // --- repo current ---
+    if (lower === "repo current") {
+      if (!chat.selectedRepoName || !chat.selectedRepoPath)
+        return ctx.reply("No repo selected. Run `repo all` then `repo <n>`.");
+      const threadId = getThreadId(chat);
+      return ctx.reply(
+        [
+          `Current repo: ${chat.selectedRepoName}`,
+          chat.selectedRepoPath,
+          `Thread: ${threadId ? "saved" : "none"}`,
+        ].join("\n")
+      );
     }
 
     // --- repo clear ---
@@ -132,7 +162,8 @@ bot.on("message:text", async (ctx) => {
       const result = await compactRepoThread(
         chat.selectedRepoPath,
         chat.selectedRepoName,
-        threadId
+        threadId,
+        env.codexReasoningEffort
       );
 
       if (result.newThreadId) {
@@ -175,7 +206,8 @@ bot.on("message:text", async (ctx) => {
     const result = await runCodexInRepo(
       chat.selectedRepoPath,
       buildPrompt(chat.selectedRepoName, chat.selectedRepoPath, text),
-      getThreadId(chat)
+      getThreadId(chat),
+      env.codexReasoningEffort
     );
 
     if (result.threadId) {
@@ -203,4 +235,5 @@ bot.catch((err) => console.error("Bot error:", err.error));
 
 console.log("Andy bot running…");
 console.log(`Repo root: ${env.codeRoot}`);
+console.log(`Codex reasoning effort: ${env.codexReasoningEffort}`);
 bot.start();
