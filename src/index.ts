@@ -5,7 +5,6 @@ import { compactRepoThread, runCodexInRepo } from "./codex.js";
 import { getTopRepos } from "./repos.js";
 import {
   appendWorkLog,
-  clearSelectedRepo,
   clearThreadId,
   getChatState,
   getThreadId,
@@ -71,6 +70,16 @@ function truncate(text: string, max: number): string {
   return clean.length <= max ? clean : clean.slice(0, max - 3) + "...";
 }
 
+function buildCommands(): string {
+  return [
+    "repo all – list repos",
+    "repo <n> – select a repo",
+    "repo current – show selected repo",
+    "repo reset – clear thread",
+    "repo compact – compress thread",
+  ].join("\n");
+}
+
 function buildRepoList(repos: RepoInfo[], selectedPath?: string): string {
   const lines = repos.map((r) => {
     const tag = r.path === selectedPath ? " <- selected" : "";
@@ -81,7 +90,11 @@ function buildRepoList(repos: RepoInfo[], selectedPath?: string): string {
     "",
     ...lines,
     "",
-    "Commands: repo 1 · repo current · repo clear · repo reset · repo compact",
+    "Commands:",
+    buildCommands()
+      .split("\n")
+      .map((cmd) => `  ${cmd}`)
+      .join("\n"),
   ].join("\n");
 }
 
@@ -105,16 +118,15 @@ bot.command("start", (ctx) =>
     [
       "Andy bot is up.",
       "",
-      "repo all — list repos",
-      "repo <n> — select a repo",
-      "repo current — show selected repo",
-      "repo clear — deselect",
-      "repo reset — clear thread",
-      "repo compact — compress thread",
+      buildCommands(),
       "",
       "Then just type your question.",
     ].join("\n")
   )
+);
+
+bot.command("help", (ctx) =>
+  ctx.reply(buildCommands())
 );
 
 bot.on("message:text", async (ctx) => {
@@ -146,13 +158,6 @@ bot.on("message:text", async (ctx) => {
           `Thread: ${threadId ? "saved" : "none"}`,
         ].join("\n")
       );
-    }
-
-    // --- repo clear ---
-    if (lower === "repo clear") {
-      clearSelectedRepo(chat);
-      saveState(state);
-      return ctx.reply("Cleared selected repo.");
     }
 
     // --- repo reset ---

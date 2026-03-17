@@ -65,10 +65,10 @@ npm run dev
 In Telegram, send:
 
 - `/start` to see the basic command list
+- `/help` to see the commands again
 - `repo all` to list the top repos under `CODE_ROOT`
 - `repo 1` to select a repo from the last list
 - `repo current` to show the selected repo and thread status
-- `repo clear` to clear the selected repo
 - `repo reset` to clear the saved Codex thread for the selected repo
 - `repo compact` to summarize the current thread into a fresh one
 
