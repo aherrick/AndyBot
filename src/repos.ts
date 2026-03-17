@@ -19,7 +19,15 @@ function getLastCommitUnix(repoPath: string): Promise<number> {
 }
 
 function formatUnix(unix: number): string {
-  return unix ? new Date(unix * 1000).toLocaleString() : "no commits";
+  if (!unix) return "no commits      ";
+  const d = new Date(unix * 1000);
+  const mm = String(d.getMonth() + 1).padStart(2, "0");
+  const dd = String(d.getDate()).padStart(2, "0");
+  const yyyy = d.getFullYear();
+  const hh = d.getHours() % 12 || 12;
+  const min = String(d.getMinutes()).padStart(2, "0");
+  const ampm = d.getHours() < 12 ? "AM" : "PM";
+  return `${mm}/${dd}/${yyyy} ${String(hh).padStart(2)} ${min} ${ampm}`;
 }
 
 export async function getTopRepos(rootPath: string, maxCount = 15): Promise<RepoInfo[]> {

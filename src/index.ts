@@ -62,8 +62,9 @@ function splitMessage(text: string, max = 3500): string[] {
   return chunks;
 }
 
-async function replyLong(ctx: Context, text: string): Promise<void> {
-  for (const chunk of splitMessage(text)) await ctx.reply(chunk);
+async function replyLong(ctx: Context, text: string, parseMode?: "HTML"): Promise<void> {
+  for (const chunk of splitMessage(text))
+    await ctx.reply(chunk, parseMode ? { parse_mode: parseMode } : undefined);
 }
 
 function truncate(text: string, max: number): string {
@@ -82,21 +83,22 @@ function buildCommands(): string {
 }
 
 function buildRepoList(repos: RepoInfo[], selectedPath?: string): string {
-  const lines = repos.map((r) => {
-    const tag = r.path === selectedPath ? " <- selected" : "";
-    return `${r.index}. ${r.name} — ${r.lastCommitText}${tag}`;
+  const nameWidth = Math.max(...repos.map((r) => r.name.length), 4);
+  const rows = repos.map((r) => {
+    const tag = r.path === selectedPath ? " *" : "  ";
+    const num = String(r.index).padStart(2);
+    const name = r.name.padEnd(nameWidth);
+    return `${num}. ${name}  ${r.lastCommitText}${tag}`;
   });
-  return [
-    `Top ${repos.length} repos under ${env.codeRoot}:`,
-    "",
-    ...lines,
-    "",
-    "Commands:",
-    buildCommands()
-      .split("\n")
-      .map((cmd) => `  ${cmd}`)
-      .join("\n"),
-  ].join("\n");
+  const commands = buildCommands()
+    .split("\n")
+    .map((c) => `  ${c}`)
+    .join("\n");
+  return (
+    `<b>Top ${repos.length} repos under ${env.codeRoot}:</b>\n` +
+    `<pre>${rows.join("\n")}</pre>\n` +
+    `<b>Commands:</b>\n<pre>${commands}</pre>`
+  );
 }
 
 function buildPrompt(repoName: string, repoPath: string, userMessage: string): string {
@@ -144,7 +146,7 @@ bot.on("message:text", async (ctx) => {
       const repos = await getTopRepos(env.codeRoot, 15);
       if (!repos.length) return ctx.reply(`No git repos found under ${env.codeRoot}`);
       lastRepoLists.set(ctx.chat.id, repos);
-      return replyLong(ctx, buildRepoList(repos, chat.selectedRepoPath));
+      return replyLong(ctx, buildRepoList(repos, chat.selectedRepoPath), "HTML");
     }
 
     // --- repo current ---
