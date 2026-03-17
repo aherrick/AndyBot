@@ -141,7 +141,7 @@ bot.on("message:text", async (ctx) => {
   try {
     // --- repo all ---
     if (lower === "repo all") {
-      const repos = getTopRepos(env.codeRoot, 15);
+      const repos = await getTopRepos(env.codeRoot, 15);
       if (!repos.length) return ctx.reply(`No git repos found under ${env.codeRoot}`);
       lastRepoLists.set(ctx.chat.id, repos);
       return replyLong(ctx, buildRepoList(repos, chat.selectedRepoPath));
