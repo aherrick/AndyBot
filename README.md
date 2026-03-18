@@ -34,7 +34,7 @@ TELEGRAM_BOT_TOKEN=your_telegram_bot_token
 CODE_ROOT=C:\code
 CODEX_REASONING_EFFORT=medium
 CODEX_SANDBOX_MODE=read-only
-CODEX_MODEL=gpt-4o
+CODEX_MODEL=gpt-5-codex
 ```
 
 `CODE_ROOT` should point at the folder that contains the git repos you want the bot to browse. If omitted, it defaults to `C:\code`.
@@ -43,7 +43,7 @@ CODEX_MODEL=gpt-4o
 
 `CODEX_SANDBOX_MODE` controls whether Codex can modify files. Valid values are `read-only`, `workspace-write`, and `danger-full-access`. If omitted or invalid, AndyBot defaults to `read-only`.
 
-`CODEX_MODEL` specifies which model to use (e.g., `gpt-4o`, `gpt-4-turbo`). If omitted, Codex will use its default model.
+`CODEX_MODEL` specifies which model to use. For Codex-first workflows, `gpt-5-codex` is a good default. If you want the current general flagship model instead, use `gpt-5.4`. If omitted, Codex will use its default model.
 
 3. Start the bot:
 

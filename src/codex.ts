@@ -4,6 +4,7 @@ import {
   type ModelReasoningEffort,
   type RunResult,
   type SandboxMode,
+  type ThreadOptions,
 } from "@openai/codex-sdk";
 
 const codex = new Codex();
@@ -16,7 +17,7 @@ function openThread(
   model?: string,
   additionalDirectories: string[] = []
 ) {
-  const opts: any = {
+  const opts: ThreadOptions = {
     workingDirectory: repoPath,
     modelReasoningEffort: reasoningEffort,
     sandboxMode,
