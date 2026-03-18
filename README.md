@@ -90,7 +90,7 @@ The bot writes local state under `data/`:
 
 - `data/state.json` stores selected repos and saved thread IDs per chat
 - `data/worklog.jsonl` stores a compact history of bot activity
-- `data/telegram-media/` is used for temporary Telegram image downloads during a request
+- `data/telegram-media/` is used for temporary Telegram image downloads during a request and cleaned up afterward
 
 The `data/` folder is already ignored by `.gitignore`.
 

@@ -23,9 +23,6 @@ import {
 
 type TelegramImageRef = {
   fileId: string;
-  kind: "photo" | "document";
-  mimeType?: string;
-  sourceName?: string;
 };
 
 type TelegramRequest = {
@@ -46,14 +43,6 @@ type PendingMediaGroup = {
 
 const TELEGRAM_MEDIA_ROOT = path.resolve("data", "telegram-media");
 const MEDIA_GROUP_SETTLE_MS = 1200;
-const IMAGE_EXTENSIONS = new Set([".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp"]);
-const MIME_EXTENSIONS: Record<string, string> = {
-  "image/jpeg": ".jpg",
-  "image/png": ".png",
-  "image/webp": ".webp",
-  "image/gif": ".gif",
-  "image/bmp": ".bmp",
-};
 
 // --- Config ---
 
@@ -199,25 +188,15 @@ function isImageDocument(message: Message): boolean {
   if (!message.document) return false;
 
   const mimeType = message.document.mime_type?.toLowerCase();
-  if (mimeType?.startsWith("image/")) return true;
-
-  const extension = path.extname(message.document.file_name ?? "").toLowerCase();
-  return IMAGE_EXTENSIONS.has(extension);
+  return !!mimeType?.startsWith("image/");
 }
 
 function extractTelegramImages(message: Message): TelegramImageRef[] {
   const photo = getLargestPhoto(message);
-  if (photo) return [{ fileId: photo.file_id, kind: "photo" }];
+  if (photo) return [{ fileId: photo.file_id }];
 
   if (isImageDocument(message) && message.document) {
-    return [
-      {
-        fileId: message.document.file_id,
-        kind: "document",
-        mimeType: message.document.mime_type,
-        sourceName: message.document.file_name,
-      },
-    ];
+    return [{ fileId: message.document.file_id }];
   }
 
   return [];
@@ -257,23 +236,15 @@ function buildThinkingMessage(repoName: string, imageCount: number): string {
   return `Thinking in ${repoName} with ${imageCount} image${imageCount === 1 ? "" : "s"}...`;
 }
 
+function pickDownloadedImageExtension(filePath?: string): string {
+  const extension = path.extname(filePath ?? "").toLowerCase();
+  return extension || ".jpg";
+}
+
 function getChatId(ctx: Context): number {
   const chatId = ctx.chat?.id;
   if (chatId == null) throw new Error("Telegram message is missing a chat id.");
   return chatId;
-}
-
-function pickImageExtension(filePath: string, image: TelegramImageRef): string {
-  const filePathExtension = path.extname(filePath).toLowerCase();
-  if (IMAGE_EXTENSIONS.has(filePathExtension)) return filePathExtension;
-
-  const nameExtension = path.extname(image.sourceName ?? "").toLowerCase();
-  if (IMAGE_EXTENSIONS.has(nameExtension)) return nameExtension;
-
-  const mimeExtension = image.mimeType ? MIME_EXTENSIONS[image.mimeType.toLowerCase()] : undefined;
-  if (mimeExtension) return mimeExtension;
-
-  return image.kind === "photo" ? ".jpg" : ".png";
 }
 
 async function downloadTelegramImages(
@@ -299,11 +270,12 @@ async function downloadTelegramImages(
         throw new Error(`Telegram download failed with status ${response.status}`);
       }
 
-      const extension = pickImageExtension(file.file_path, image);
-      const filePath = path.join(directory, `${String(index + 1).padStart(2, "0")}${extension}`);
-      const bytes = Buffer.from(await response.arrayBuffer());
+      const filePath = path.join(
+        directory,
+        `${String(index + 1).padStart(2, "0")}${pickDownloadedImageExtension(file.file_path)}`
+      );
 
-      await fs.writeFile(filePath, bytes);
+      await fs.writeFile(filePath, Buffer.from(await response.arrayBuffer()));
       paths.push(filePath);
     }
 
