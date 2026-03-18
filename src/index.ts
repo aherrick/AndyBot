@@ -1,6 +1,10 @@
 import "dotenv/config";
-import type { ModelReasoningEffort, SandboxMode } from "@openai/codex-sdk";
+import { randomUUID } from "node:crypto";
+import fs from "node:fs/promises";
+import path from "node:path";
+import type { Input, ModelReasoningEffort, SandboxMode } from "@openai/codex-sdk";
 import { Bot, Context } from "grammy";
+import type { Message } from "grammy/types";
 import { compactRepoThread, runCodexInRepo } from "./codex.js";
 import { getTopRepos } from "./repos.js";
 import {
@@ -12,8 +16,44 @@ import {
   saveState,
   setSelectedRepo,
   setThreadId,
+  type ChatState,
+  type PersistedState,
   type RepoInfo,
 } from "./state.js";
+
+type TelegramImageRef = {
+  fileId: string;
+  kind: "photo" | "document";
+  mimeType?: string;
+  sourceName?: string;
+};
+
+type TelegramRequest = {
+  text: string;
+  images: TelegramImageRef[];
+};
+
+type DownloadedImages = {
+  directory: string;
+  paths: string[];
+};
+
+type PendingMediaGroup = {
+  ctx: Context;
+  messages: Message[];
+  timer?: NodeJS.Timeout;
+};
+
+const TELEGRAM_MEDIA_ROOT = path.resolve("data", "telegram-media");
+const MEDIA_GROUP_SETTLE_MS = 1200;
+const IMAGE_EXTENSIONS = new Set([".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp"]);
+const MIME_EXTENSIONS: Record<string, string> = {
+  "image/jpeg": ".jpg",
+  "image/png": ".png",
+  "image/webp": ".webp",
+  "image/gif": ".gif",
+  "image/bmp": ".bmp",
+};
 
 // --- Config ---
 
@@ -54,6 +94,7 @@ if (!env.telegramBotToken) throw new Error("Missing TELEGRAM_BOT_TOKEN in .env")
 // --- Helpers ---
 
 const lastRepoLists = new Map<number, RepoInfo[]>();
+const pendingMediaGroups = new Map<string, PendingMediaGroup>();
 
 function splitMessage(text: string, max = 3500): string[] {
   if (text.length <= max) return [text];
@@ -74,11 +115,11 @@ function truncate(text: string, max: number): string {
 
 function buildCommands(): string {
   return [
-    "repo all – list repos",
-    "repo &lt;n&gt; – select a repo",
-    "repo current – show selected repo",
-    "repo reset – clear thread",
-    "repo compact – compress thread",
+    "repo all - list repos",
+    "repo &lt;n&gt; - select a repo",
+    "repo current - show selected repo",
+    "repo reset - clear thread",
+    "repo compact - compress thread",
   ].join("\n");
 }
 
@@ -101,15 +142,391 @@ function buildRepoList(repos: RepoInfo[], selectedPath?: string): string {
   );
 }
 
-function buildPrompt(repoName: string, repoPath: string, userMessage: string): string {
+function buildPrompt(
+  repoName: string,
+  repoPath: string,
+  userMessage: string,
+  imageCount = 0
+): string {
+  const requestText =
+    userMessage.trim() ||
+    (imageCount
+      ? `The Telegram request included ${imageCount} attached image(s) and no text. Use the images to understand the request and respond helpfully.`
+      : "Respond helpfully to the user's request.");
+
   return [
     `Repo: ${repoName}`,
     `Path: ${repoPath}`,
     "",
     "Be concise and practical. Inspect the repository in the current working directory.",
+    imageCount ? `The Telegram request includes ${imageCount} attached image(s). Use them as part of your answer.` : "",
     "",
-    userMessage,
-  ].join("\n");
+    requestText,
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
+function buildCodexInput(
+  repoName: string,
+  repoPath: string,
+  requestText: string,
+  imagePaths: string[]
+): Input {
+  const prompt = buildPrompt(repoName, repoPath, requestText, imagePaths.length);
+  if (!imagePaths.length) return prompt;
+
+  return [
+    { type: "text", text: prompt },
+    ...imagePaths.map((imagePath) => ({ type: "local_image" as const, path: imagePath })),
+  ];
+}
+
+function getMessageText(message: Message): string {
+  return (message.text ?? message.caption ?? "").trim();
+}
+
+function isBotCommandMessage(message: Message): boolean {
+  if (!message.text?.trim()) return false;
+  return !!message.entities?.some((entity) => entity.type === "bot_command" && entity.offset === 0);
+}
+
+function getLargestPhoto(message: Message) {
+  return message.photo?.at(-1);
+}
+
+function isImageDocument(message: Message): boolean {
+  if (!message.document) return false;
+
+  const mimeType = message.document.mime_type?.toLowerCase();
+  if (mimeType?.startsWith("image/")) return true;
+
+  const extension = path.extname(message.document.file_name ?? "").toLowerCase();
+  return IMAGE_EXTENSIONS.has(extension);
+}
+
+function extractTelegramImages(message: Message): TelegramImageRef[] {
+  const photo = getLargestPhoto(message);
+  if (photo) return [{ fileId: photo.file_id, kind: "photo" }];
+
+  if (isImageDocument(message) && message.document) {
+    return [
+      {
+        fileId: message.document.file_id,
+        kind: "document",
+        mimeType: message.document.mime_type,
+        sourceName: message.document.file_name,
+      },
+    ];
+  }
+
+  return [];
+}
+
+function buildTelegramRequest(messages: Message[]): TelegramRequest {
+  const sorted = [...messages].sort((a, b) => a.message_id - b.message_id);
+  const seenText = new Set<string>();
+  const textParts: string[] = [];
+
+  for (const message of sorted) {
+    const text = getMessageText(message);
+    if (text && !seenText.has(text)) {
+      seenText.add(text);
+      textParts.push(text);
+    }
+  }
+
+  return {
+    text: textParts.join("\n\n"),
+    images: sorted.flatMap(extractTelegramImages),
+  };
+}
+
+function describeIncomingRequest(request: TelegramRequest): string {
+  const imageLabel = request.images.length
+    ? `${request.images.length} image${request.images.length === 1 ? "" : "s"}`
+    : "";
+
+  if (request.text && imageLabel) return `${truncate(request.text, 100)} + ${imageLabel}`;
+  if (request.text) return truncate(request.text, 100);
+  return imageLabel || "(empty request)";
+}
+
+function buildThinkingMessage(repoName: string, imageCount: number): string {
+  if (!imageCount) return `Thinking in ${repoName}...`;
+  return `Thinking in ${repoName} with ${imageCount} image${imageCount === 1 ? "" : "s"}...`;
+}
+
+function getChatId(ctx: Context): number {
+  const chatId = ctx.chat?.id;
+  if (chatId == null) throw new Error("Telegram message is missing a chat id.");
+  return chatId;
+}
+
+function pickImageExtension(filePath: string, image: TelegramImageRef): string {
+  const filePathExtension = path.extname(filePath).toLowerCase();
+  if (IMAGE_EXTENSIONS.has(filePathExtension)) return filePathExtension;
+
+  const nameExtension = path.extname(image.sourceName ?? "").toLowerCase();
+  if (IMAGE_EXTENSIONS.has(nameExtension)) return nameExtension;
+
+  const mimeExtension = image.mimeType ? MIME_EXTENSIONS[image.mimeType.toLowerCase()] : undefined;
+  if (mimeExtension) return mimeExtension;
+
+  return image.kind === "photo" ? ".jpg" : ".png";
+}
+
+async function downloadTelegramImages(
+  ctx: Context,
+  images: TelegramImageRef[]
+): Promise<DownloadedImages | undefined> {
+  if (!images.length) return undefined;
+
+  const directory = path.join(TELEGRAM_MEDIA_ROOT, `${Date.now()}-${randomUUID()}`);
+  await fs.mkdir(directory, { recursive: true });
+
+  try {
+    const paths: string[] = [];
+
+    for (const [index, image] of images.entries()) {
+      const file = await ctx.api.getFile(image.fileId);
+      if (!file.file_path) throw new Error(`Telegram did not return a file path for ${image.fileId}`);
+
+      const response = await fetch(
+        `https://api.telegram.org/file/bot${env.telegramBotToken}/${file.file_path}`
+      );
+      if (!response.ok) {
+        throw new Error(`Telegram download failed with status ${response.status}`);
+      }
+
+      const extension = pickImageExtension(file.file_path, image);
+      const filePath = path.join(directory, `${String(index + 1).padStart(2, "0")}${extension}`);
+      const bytes = Buffer.from(await response.arrayBuffer());
+
+      await fs.writeFile(filePath, bytes);
+      paths.push(filePath);
+    }
+
+    return { directory, paths };
+  } catch (error) {
+    await fs.rm(directory, { recursive: true, force: true });
+    throw error;
+  }
+}
+
+async function cleanupDownloadedImages(downloaded?: DownloadedImages): Promise<void> {
+  if (!downloaded) return;
+  await fs.rm(downloaded.directory, { recursive: true, force: true });
+}
+
+async function handleRepoCommand(
+  ctx: Context,
+  text: string,
+  state: PersistedState,
+  chat: ChatState
+): Promise<boolean> {
+  const lower = text.trim().toLowerCase();
+  const chatId = getChatId(ctx);
+
+  if (lower === "repo all") {
+    const repos = await getTopRepos(env.codeRoot, 15);
+    if (!repos.length) {
+      await ctx.reply(`No git repos found under ${env.codeRoot}`);
+      return true;
+    }
+
+    lastRepoLists.set(chatId, repos);
+    await replyLong(ctx, buildRepoList(repos, chat.selectedRepoPath), "HTML");
+    return true;
+  }
+
+  if (lower === "repo current") {
+    if (!chat.selectedRepoName || !chat.selectedRepoPath) {
+      await ctx.reply("No repo selected. Run `repo all` then `repo <n>`.");
+      return true;
+    }
+
+    const threadId = getThreadId(chat);
+    await ctx.reply(
+      [
+        `Current repo: ${chat.selectedRepoName}`,
+        chat.selectedRepoPath,
+        `Thread: ${threadId ? "saved" : "none"}`,
+      ].join("\n")
+    );
+    return true;
+  }
+
+  if (lower === "repo reset") {
+    if (!chat.selectedRepoName) {
+      await ctx.reply("No repo selected.");
+      return true;
+    }
+
+    clearThreadId(chat);
+    saveState(state);
+    await ctx.reply(`Cleared saved thread for ${chat.selectedRepoName}.`);
+    return true;
+  }
+
+  if (lower === "repo compact") {
+    if (!chat.selectedRepoName || !chat.selectedRepoPath) {
+      await ctx.reply("No repo selected.");
+      return true;
+    }
+
+    const threadId = getThreadId(chat);
+    if (!threadId) {
+      await ctx.reply("No saved thread yet for this repo.");
+      return true;
+    }
+
+    await ctx.reply(`Compacting thread for ${chat.selectedRepoName}...`);
+    const result = await compactRepoThread(
+      chat.selectedRepoPath,
+      chat.selectedRepoName,
+      threadId,
+      env.codexReasoningEffort,
+      env.codexSandboxMode,
+      env.codexModel
+    );
+
+    if (result.newThreadId) {
+      setThreadId(chat, result.newThreadId);
+      saveState(state);
+    }
+
+    appendWorkLog({
+      repoName: chat.selectedRepoName,
+      repoPath: chat.selectedRepoPath,
+      type: "compact",
+      summary: truncate(result.summary, 220),
+    });
+
+    await replyLong(ctx, `Fresh thread for ${chat.selectedRepoName}.\n\n${result.summary}`);
+    return true;
+  }
+
+  const numMatch = lower.match(/^repo\s+(\d{1,2})$/);
+  if (numMatch) {
+    const list = lastRepoLists.get(chatId);
+    if (!list?.length) {
+      await ctx.reply("Run `repo all` first.");
+      return true;
+    }
+
+    const chosen = list.find((repo) => repo.index === Number(numMatch[1]));
+    if (!chosen) {
+      await ctx.reply(`Pick 1-${list.length}.`);
+      return true;
+    }
+
+    setSelectedRepo(chat, chosen.name, chosen.path);
+    saveState(state);
+
+    const hasThread = !!getThreadId(chat);
+    await ctx.reply(
+      `Using repo ${chosen.index}: ${chosen.name}\n${chosen.path}\n\n` +
+        (hasThread ? "Resuming saved thread." : "No saved thread yet.")
+    );
+    return true;
+  }
+
+  return false;
+}
+
+async function handleCodexRequest(
+  ctx: Context,
+  request: TelegramRequest,
+  state: PersistedState,
+  chat: ChatState
+): Promise<void> {
+  if (!chat.selectedRepoName || !chat.selectedRepoPath) {
+    await ctx.reply("Pick a repo first: `repo all` then `repo 1`.");
+    return;
+  }
+
+  let downloaded: DownloadedImages | undefined;
+
+  try {
+    await ctx.reply(buildThinkingMessage(chat.selectedRepoName, request.images.length));
+    downloaded = await downloadTelegramImages(ctx, request.images);
+
+    const result = await runCodexInRepo(
+      chat.selectedRepoPath,
+      buildCodexInput(
+        chat.selectedRepoName,
+        chat.selectedRepoPath,
+        request.text,
+        downloaded?.paths ?? []
+      ),
+      getThreadId(chat),
+      env.codexReasoningEffort,
+      env.codexSandboxMode,
+      env.codexModel,
+      downloaded ? [downloaded.directory] : []
+    );
+
+    if (result.threadId) {
+      setThreadId(chat, result.threadId);
+      saveState(state);
+    }
+
+    appendWorkLog({
+      repoName: chat.selectedRepoName,
+      repoPath: chat.selectedRepoPath,
+      type: "message",
+      request: truncate(describeIncomingRequest(request), 140),
+      summary: truncate(result.text, 220),
+    });
+
+    await replyLong(ctx, result.text || "(No response)");
+  } finally {
+    await cleanupDownloadedImages(downloaded);
+  }
+}
+
+async function handleMessageBatch(ctx: Context, messages: Message[]): Promise<void> {
+  const request = buildTelegramRequest(messages);
+  if (!request.text && !request.images.length) {
+    await ctx.reply("Send a text message or an image with an optional caption.");
+    return;
+  }
+
+  const state = loadState();
+  const chat = getChatState(state, getChatId(ctx));
+
+  if (messages.length === 1 && !request.images.length && request.text) {
+    const handledCommand = await handleRepoCommand(ctx, request.text, state, chat);
+    if (handledCommand) return;
+  }
+
+  await handleCodexRequest(ctx, request, state, chat);
+}
+
+function queueMediaGroup(ctx: Context): void {
+  const message = ctx.message;
+  const mediaGroupId = message?.media_group_id;
+  if (!message || !mediaGroupId) return;
+
+  const key = `${getChatId(ctx)}:${mediaGroupId}`;
+  const pending = pendingMediaGroups.get(key) ?? { ctx, messages: [] };
+
+  pending.ctx = ctx;
+  pending.messages.push(message);
+
+  if (pending.timer) clearTimeout(pending.timer);
+  pending.timer = setTimeout(() => {
+    pendingMediaGroups.delete(key);
+    void handleMessageBatch(pending.ctx, pending.messages).catch(async (error) => {
+      console.error(error);
+      await pending.ctx.reply(
+        "Something failed. Check that git and Codex are installed and the selected repo exists."
+      );
+    });
+  }, MEDIA_GROUP_SETTLE_MS);
+
+  pendingMediaGroups.set(key, pending);
 }
 
 // --- Bot ---
@@ -123,142 +540,42 @@ bot.command("start", (ctx) =>
       "",
       buildCommands(),
       "",
-      "Then just type your question.",
+      "Then send a question, a photo, or an album of images.",
     ].join("\n"),
     { parse_mode: "HTML" }
   )
 );
 
 bot.command("help", (ctx) =>
-  ctx.reply(buildCommands(), { parse_mode: "HTML" })
+  ctx.reply(
+    [buildCommands(), "", "You can also send a photo or an album with an optional caption."].join(
+      "\n"
+    ),
+    { parse_mode: "HTML" }
+  )
 );
 
-bot.on("message:text", async (ctx) => {
-  const text = ctx.message.text.trim();
-  if (!text) return ctx.reply("Send me a message.");
-
-  const lower = text.toLowerCase();
-  const state = loadState();
-  const chat = getChatState(state, ctx.chat.id);
+bot.on("message", async (ctx) => {
+  if (isBotCommandMessage(ctx.message)) return;
 
   try {
-    // --- repo all ---
-    if (lower === "repo all") {
-      const repos = await getTopRepos(env.codeRoot, 15);
-      if (!repos.length) return ctx.reply(`No git repos found under ${env.codeRoot}`);
-      lastRepoLists.set(ctx.chat.id, repos);
-      return replyLong(ctx, buildRepoList(repos, chat.selectedRepoPath), "HTML");
+    if (ctx.message.media_group_id) {
+      if (extractTelegramImages(ctx.message).length) queueMediaGroup(ctx);
+      return;
     }
 
-    // --- repo current ---
-    if (lower === "repo current") {
-      if (!chat.selectedRepoName || !chat.selectedRepoPath)
-        return ctx.reply("No repo selected. Run `repo all` then `repo <n>`.");
-      const threadId = getThreadId(chat);
-      return ctx.reply(
-        [
-          `Current repo: ${chat.selectedRepoName}`,
-          chat.selectedRepoPath,
-          `Thread: ${threadId ? "saved" : "none"}`,
-        ].join("\n")
-      );
-    }
-
-    // --- repo reset ---
-    if (lower === "repo reset") {
-      if (!chat.selectedRepoName) return ctx.reply("No repo selected.");
-      clearThreadId(chat);
-      saveState(state);
-      return ctx.reply(`Cleared saved thread for ${chat.selectedRepoName}.`);
-    }
-
-    // --- repo compact ---
-    if (lower === "repo compact") {
-      if (!chat.selectedRepoName || !chat.selectedRepoPath)
-        return ctx.reply("No repo selected.");
-      const threadId = getThreadId(chat);
-      if (!threadId) return ctx.reply("No saved thread yet for this repo.");
-
-      await ctx.reply(`Compacting thread for ${chat.selectedRepoName}...`);
-      const result = await compactRepoThread(
-        chat.selectedRepoPath,
-        chat.selectedRepoName,
-        threadId,
-        env.codexReasoningEffort,
-        env.codexSandboxMode,
-        env.codexModel
-      );
-
-      if (result.newThreadId) {
-        setThreadId(chat, result.newThreadId);
-        saveState(state);
-      }
-      appendWorkLog({
-        repoName: chat.selectedRepoName,
-        repoPath: chat.selectedRepoPath,
-        type: "compact",
-        summary: truncate(result.summary, 220),
-      });
-      return replyLong(ctx, `Fresh thread for ${chat.selectedRepoName}.\n\n${result.summary}`);
-    }
-
-    // --- repo <n> ---
-    const numMatch = lower.match(/^repo\s+(\d{1,2})$/);
-    if (numMatch) {
-      const list = lastRepoLists.get(ctx.chat.id);
-      if (!list?.length) return ctx.reply("Run `repo all` first.");
-      const chosen = list.find((r) => r.index === Number(numMatch[1]));
-      if (!chosen) return ctx.reply(`Pick 1–${list.length}.`);
-
-      setSelectedRepo(chat, chosen.name, chosen.path);
-      saveState(state);
-
-      const hasThread = !!getThreadId(chat);
-      return ctx.reply(
-        `Using repo ${chosen.index}: ${chosen.name}\n${chosen.path}\n\n` +
-          (hasThread ? "Resuming saved thread." : "No saved thread yet.")
-      );
-    }
-
-    // --- Free-form message → Codex ---
-    if (!chat.selectedRepoName || !chat.selectedRepoPath)
-      return ctx.reply("Pick a repo first: `repo all` then `repo 1`.");
-
-    await ctx.reply(`Thinking in ${chat.selectedRepoName}...`);
-
-    const result = await runCodexInRepo(
-      chat.selectedRepoPath,
-      buildPrompt(chat.selectedRepoName, chat.selectedRepoPath, text),
-      getThreadId(chat),
-      env.codexReasoningEffort,
-      env.codexSandboxMode,
-      env.codexModel
-    );
-
-    if (result.threadId) {
-      setThreadId(chat, result.threadId);
-      saveState(state);
-    }
-    appendWorkLog({
-      repoName: chat.selectedRepoName,
-      repoPath: chat.selectedRepoPath,
-      type: "message",
-      request: truncate(text, 140),
-      summary: truncate(result.text, 220),
-    });
-
-    await replyLong(ctx, result.text || "(No response)");
+    await handleMessageBatch(ctx, [ctx.message]);
   } catch (error) {
     console.error(error);
     await ctx.reply(
-      "Something failed. Check that git & Codex are installed and the selected repo exists."
+      "Something failed. Check that git and Codex are installed and the selected repo exists."
     );
   }
 });
 
 bot.catch((err) => console.error("Bot error:", err.error));
 
-console.log("Andy bot running…");
+console.log("Andy bot running...");
 console.log(`Repo root: ${env.codeRoot}`);
 console.log(`Codex reasoning effort: ${env.codexReasoningEffort}`);
 console.log(`Codex sandbox mode: ${env.codexSandboxMode}`);

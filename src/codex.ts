@@ -1,4 +1,10 @@
-import { Codex, type ModelReasoningEffort, type RunResult, type SandboxMode } from "@openai/codex-sdk";
+import {
+  Codex,
+  type Input,
+  type ModelReasoningEffort,
+  type RunResult,
+  type SandboxMode,
+} from "@openai/codex-sdk";
 
 const codex = new Codex();
 
@@ -7,7 +13,8 @@ function openThread(
   reasoningEffort: ModelReasoningEffort,
   sandboxMode: SandboxMode,
   existingThreadId?: string,
-  model?: string
+  model?: string,
+  additionalDirectories: string[] = []
 ) {
   const opts: any = {
     workingDirectory: repoPath,
@@ -15,6 +22,7 @@ function openThread(
     sandboxMode,
   };
   if (model) opts.model = model;
+  if (additionalDirectories.length) opts.additionalDirectories = additionalDirectories;
   return existingThreadId
     ? codex.resumeThread(existingThreadId, opts)
     : codex.startThread(opts);
@@ -22,15 +30,23 @@ function openThread(
 
 export async function runCodexInRepo(
   repoPath: string,
-  prompt: string,
+  input: Input,
   existingThreadId?: string,
   reasoningEffort: ModelReasoningEffort = "medium",
   sandboxMode: SandboxMode = "read-only",
-  model?: string
+  model?: string,
+  additionalDirectories: string[] = []
 ): Promise<{ text: string; threadId?: string }> {
-  const thread = openThread(repoPath, reasoningEffort, sandboxMode, existingThreadId, model);
+  const thread = openThread(
+    repoPath,
+    reasoningEffort,
+    sandboxMode,
+    existingThreadId,
+    model,
+    additionalDirectories
+  );
 
-  const { events } = await thread.runStreamed(prompt);
+  const { events } = await thread.runStreamed(input);
   let finalResponse = "";
 
   for await (const event of events) {
